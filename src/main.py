@@ -22,7 +22,7 @@ def softmax(fitnesses,temperature):
 # normalized xavier normalization is commonly used for initializing weights for networks using sigmoid or tanh
 def normalized_xavier(inputs,outputs,mult):
 
-    glorot = mult*np.sqrt(6.0/(inputs+outputs))
+    xavier = mult*np.sqrt(6.0/(inputs+outputs))
     # number of nodes in the previous layer
     #n = inputs
     # number of nodes in the next layer
@@ -31,14 +31,14 @@ def normalized_xavier(inputs,outputs,mult):
     #lower, upper = -(sqrt(6.0) / sqrt(n + m)), (sqrt(6.0) / sqrt(n + m))
     #return np.random.uniform(lower, upper, size=(n,m))
     #scaled = lower + numbers * (upper - lower)
-    return np.random.uniform(-glorot,glorot,size=(inputs,outputs))
+    return np.random.uniform(-1 * xavier,xavier,size=(inputs,outputs))
 
 
 def sigmoid(x):
     return 1/(1 + np.exp(-x))
 
 # Our Agent is represented by an MLP consisting of 2 layers
-# Use glorot uniform initialization for each of the layers including a bias
+# Use xavier uniform initialization for each of the layers including a bias
 # Our selected activation function for each layer will be tanh
 
 class Agent(object):
