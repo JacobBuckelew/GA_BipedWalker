@@ -1,110 +1,212 @@
+#############################################################################################################################
+# Imports
+
 import gym
 import numpy as np
 from copy import deepcopy
 import matplotlib.pyplot as plt
+from math import sqrt
 
-def glorot_uniform(n_inputs,n_outputs,multiplier=1.0):
-    ''' Glorot uniform initialization '''
-    glorot = multiplier*np.sqrt(6.0/(n_inputs+n_outputs))
-    return np.random.uniform(-glorot,glorot,size=(n_inputs,n_outputs))
+# used for saving results of experiments
+import timeit
+import json
 
-def softmax(scores,temp=5.0):
-    ''' transforms scores to probabilites '''
-    exp = np.exp(np.array(scores)/temp)
-    return exp/exp.sum()
+#############################################################################################################################
+
+# softmax will convert the fitness scores into probability values. Temperature controls the randomness of output distribution
+def softmax(fitnesses,temperature):
+    
+    e = np.exp(np.array(fitnesses)/temperature)
+    return e/e.sum()
+
+# normalized xavier normalization is commonly used for initializing weights for networks using sigmoid or tanh
+def normalized_xavier(inputs,outputs,mult):
+
+    glorot = mult*np.sqrt(6.0/(inputs+outputs))
+    # number of nodes in the previous layer
+    #n = inputs
+    # number of nodes in the next layer
+    #m = outputs
+    # calculate the range for the weights
+    #lower, upper = -(sqrt(6.0) / sqrt(n + m)), (sqrt(6.0) / sqrt(n + m))
+    #return np.random.uniform(lower, upper, size=(n,m))
+    #scaled = lower + numbers * (upper - lower)
+    return np.random.uniform(-glorot,glorot,size=(inputs,outputs))
+
+
+def sigmoid(x):
+    return 1/(1 + np.exp(-x))
+
+# Our Agent is represented by an MLP consisting of 2 layers
+# Use glorot uniform initialization for each of the layers including a bias
+# Our selected activation function for each layer will be tanh
 
 class Agent(object):
-    ''' A Neural Network '''
-    
-    def __init__(self, n_inputs, n_hidden, n_outputs, mutate_rate=.05, init_multiplier=1.0):
-        ''' Create agent's brain '''
-        self.n_inputs = n_inputs
-        self.n_hidden = n_hidden
-        self.n_outputs = n_outputs
-        self.mutate_rate = mutate_rate
-        self.init_multiplier = init_multiplier
-        self.network = {'Layer 1' : glorot_uniform(n_inputs, n_hidden,init_multiplier),
-                        'Bias 1'  : np.zeros((1,n_hidden)),
-                        'Layer 2' : glorot_uniform(n_hidden, n_outputs,init_multiplier),
-                        'Bias 2'  : np.zeros((1,n_outputs))}
+
+    # Initialize the parameters of the model
+    def __init__(self, inputs, hidden, outputs, mutate, mult):
+        self.mutate= mutate
+        self.mult= mult
+        self.inputs = inputs
+        self.hidden = hidden
+        self.outputs = outputs
+        self.network = {'Layer 1' : normalized_xavier(inputs, hidden,mult),
+                        'Bias 1'  : np.zeros((1,hidden)),
+                        'Layer 2' : normalized_xavier(hidden, outputs,mult),
+                        'Bias 2'  : np.zeros((1,outputs))}
                         
-    def act(self, state):
-        ''' Use the network to decide on an action '''        
+    
+    # Act is essentially the forward pass through the network
+    # uses the current state to determine the action the agent will take
+    def act(self, state):       
         if(state.shape[0] != 1):
             state = state.reshape(1,-1)
         net = self.network
+        # take state as input into first layer
         layer_one = np.tanh(np.matmul(state,net['Layer 1']) + net['Bias 1'])
+        # pass first layers output into next layer as input
         layer_two = np.tanh(np.matmul(layer_one, net['Layer 2']) + net['Bias 2'])
         return layer_two[0]
     
-    def __add__(self, another):
-        ''' overloads the + operator for breeding '''
-        child = Agent(self.n_inputs, self.n_hidden, self.n_outputs, self.mutate_rate, self.init_multiplier)
+
+    # This method overloads the + operator for the purpose of reproduction
+    # between agents. 
+    def __add__(self, mate):
+        child = Agent(self.inputs, self.hidden, self.outputs, self.mutate, self.mult)
+        
         for key in child.network:
-            n_inputs,n_outputs = child.network[key].shape
+            #print("key", key)
             mask = np.random.choice([0,1],size=child.network[key].shape,p=[.5,.5])
-            random = glorot_uniform(mask.shape[0],mask.shape[1])
-            child.network[key] = np.where(mask==1,self.network[key],another.network[key])
-            mask = np.random.choice([0,1],size=child.network[key].shape,p=[1-self.mutate_rate,self.mutate_rate])
+            #print("mask", mask)
+            #print(mask.shape)
+            random = normalized_xavier(mask.shape[0],mask.shape[1], self.mult)
+            #print("random", random)
+            #print(random.shape)
+            #print("self:", self.network[key])
+            #print("mate:", mate.network[key])
+            child.network[key] = np.where(mask==1,self.network[key],mate.network[key])
+            #print("new key:", child.network[key])
+            mask = np.random.choice([0,1],size=child.network[key].shape,p=[1-self.mutate,self.mutate])
+            #print("mask:", mask)
+            #print(mask.shape)
             child.network[key] = np.where(mask==1,child.network[key]+random,child.network[key])
+            #print(child.network[key])
         return child
     
 def run_trial(env,agent,verbose=False):
-    ''' an agent performs 3 episodes of the env '''
+    EPISODES = 4
     totals = []
-    for _ in range(3):
+    for _ in range(EPISODES):
         state = env.reset()
-        if verbose: env.render()
+        if verbose: env.render(mode="human")
         total = 0
         done = False
         while not done:
             state, reward, done, _ = env.step(agent.act(state))
-            if verbose: plt.imshow(env.render())
+            if verbose: env.render()
             total += reward
         totals.append(total)
-    return sum(totals)/3.0
+    return sum(totals)/EPISODES
 
-def next_generation(env,population,scores,temperature):
-    ''' breeds a new generation of agents '''
-    scores, population =  zip(*sorted(zip(scores,population),reverse=True))
+def next_generation(env,population,fitnesses,temperature):
+    fitnesses, population =  zip(*sorted(zip(fitnesses,population),reverse=True))
     children = list(population[:int(len(population)/4)])
-    parents = list(np.random.choice(population,size=2*(len(population)-len(children)),p=softmax(scores,temperature)))
+    parents = list(np.random.choice(population,size=2*(len(population)-len(children)),p=softmax(fitnesses,temperature)))
     children = children + [parents[i]+parents[i+1] for i in range(0,len(parents)-1,2)]
-    scores = [run_trial(env,agent) for agent in children]
+    fitnesses = [run_trial(env,agent) for agent in children]
 
-    return children,scores
+    return children,fitnesses
+
+
+# Main function for running the training process
 
 def main():
-    ''' main function '''
-    # Setup environment
+    
+    # initialize the bipedalwalker-v2 environment
     env = gym.make('BipedalWalker-v2')
-    env.seed(0)
-    np.random.seed(0)
-    
-    # network params
-    n_inputs = env.observation_space.shape[0]
-    n_actions = env.action_space.shape[0]
-    n_hidden = 512
-    multiplier = 5
-    
-    # Population params
-    pop_size = 64
-    mutate_rate = .1
-    softmax_temp = 5.0
-    
-    # Training
-    n_generations = 1
-    population = [Agent(n_inputs,n_hidden,n_actions,mutate_rate,multiplier) for i in list(range(pop_size))]
-    scores = [run_trial(env,agent) for agent in population]
-    best = [deepcopy(population[np.argmax(scores)])]
-    for generation in list(range(n_generations)):
-        population,scores = next_generation(env,population, scores,softmax_temp)
-        best.append(deepcopy(population[np.argmax(scores)]))
-        print("Generation:",generation,"Score:",np.max(scores))
 
-    # Record every agent
-    env = gym.wrappers.Monitor(env,'./video',force=True,video_callable=lambda episode_id: episode_id%3==0)   
+    # for replication purposes
+    np.random.seed(4)
+    env.seed(4)
+    
+    
+    # see the observation and action spaces
+    obs_space = env.observation_space.shape
+    action_space = env.action_space.shape
+
+
+    # Define some of the parameters for the MLP
+    # We need to track features, number of hidden layers, actions, and a multiplier
+    features = obs_space[0]
+    hidden_layers = 512
+    mult = 10
+    actions = action_space[0]
+    
+    
+    # Set parameters for the genetic algorithm
+    # Population size, mutation chance, and a softmax_temp
+    # temp is useful for softmax specifically since it helps control randomness
+    population_size = 80
+    mutate= 0.11
+    temp = 20.0
+    win_condition = 200
+    
+    # Timer for timing the training process
+    start_time = timeit.default_timer()
+    generations = 100
+    population = [Agent(features,hidden_layers,actions,mutate,mult) for i in list(range(population_size))]
+    fitnesses = [run_trial(env,agent) for agent in population]
+    avg_fitnesses = []
+    max_fitnesses = []
+    first_gen = 0
+    best = [deepcopy(population[np.argmax(fitnesses)])]
+    best_fitness = np.max(fitnesses)
+    best_generation = 0
+    for generation in list(range(generations)):
+        population,fitnesses = next_generation(env,population, fitnesses,temp)
+        best.append(deepcopy(population[np.argmax(fitnesses)]))
+        print("Generation:",generation,"fitness:",np.max(fitnesses))
+        if(np.max(fitnesses) >= win_condition):
+            first_gen = generation
+        if(np.max(fitnesses) > best_fitness):
+            best_generation = generation
+            best_fitness = np.max(fitnesses)
+        avg_fitnesses.append(np.mean(fitnesses))
+        max_fitnesses.append(np.max(fitnesses))
+
+    end_time =  timeit.default_timer()
+
+    # Store results of training
+    result_dict = {}
+
+    result_dict["train_time"] = (end_time - start_time)/60.0
+    result_dict["first_gen"] = first_gen
+    result_dict["best_generation"] = best_generation
+    result_dict["overall_bestfitness"] = best_fitness
+    result_dict["final_bestfitness"] = max_fitnesses[-1]
+    result_dict["final_avgfitness"] = avg_fitnesses[-1]
+
+    with open("/Users/jacobbuckelew/Documents/CS4260/GA_BipedWalker/results/metrics.json", 'w') as file:
+            json.dump(result_dict, file)
+
+
+
+    # plotting max and avg fitnesses across the generations
+    fig = plt.figure(figsize=(14,10))
+    x = len(avg_fitnesses)
+    plt.plot(avg_fitnesses, label="Average Fitness", linewidth='5.0')
+    plt.plot(max_fitnesses, label="Max Fitness", linewidth='5.0', ls='--')
+    plt.xlabel("Generation", fontsize='32')
+    plt.ylabel("Fitness", fontsize='32')
+    plt.legend(fontsize='28')
+    plt.yticks(fontsize=28)
+    plt.xticks(fontsize=28)
+    plt.savefig("/Users/jacobbuckelew/Documents/CS4260/GA_BipedWalker/results/fitness_curve.png", dpi=500)
+
+    # Create recordings of the agents every 3 episodes
+    env = gym.wrappers.Monitor(env,'./video',force=True,video_callable=lambda episode_id: episode_id%4==0)  
     for agent in best:
+        print("Recording")
         run_trial(env,agent)
     env.close()
     
