@@ -13,11 +13,6 @@ import json
 
 #############################################################################################################################
 
-# softmax will convert the fitness scores into probability values. Temperature controls the randomness of output distribution
-def softmax(fitnesses,temperature):
-    
-    e = np.exp(np.array(fitnesses)/temperature)
-    return e/e.sum()
 
 # normalized xavier normalization is commonly used for initializing weights for networks using sigmoid or tanh
 def normalized_xavier(inputs,outputs,mult):
@@ -34,8 +29,12 @@ def normalized_xavier(inputs,outputs,mult):
     return np.random.uniform(-1 * xavier,xavier,size=(inputs,outputs))
 
 
-def sigmoid(x):
-    return 1/(1 + np.exp(-x))
+# softmax will convert the fitness scores into probability values. Temperature controls the randomness of output distribution
+def softmax(fitnesses,temperature):
+    
+    e = np.exp(np.array(fitnesses)/temperature)
+    return e/e.sum()
+
 
 # Our Agent is represented by an MLP consisting of 2 layers
 # Use xavier uniform initialization for each of the layers including a bias
@@ -55,18 +54,6 @@ class Agent(object):
                         'Layer 2' : normalized_xavier(hidden, outputs,mult),
                         'Bias 2'  : np.zeros((1,outputs))}
                         
-    
-    # Act is essentially the forward pass through the network
-    # uses the current state to determine the action the agent will take
-    def act(self, state):       
-        if(state.shape[0] != 1):
-            state = state.reshape(1,-1)
-        net = self.network
-        # take state as input into first layer
-        layer_one = np.tanh(np.matmul(state,net['Layer 1']) + net['Bias 1'])
-        # pass first layers output into next layer as input
-        layer_two = np.tanh(np.matmul(layer_one, net['Layer 2']) + net['Bias 2'])
-        return layer_two[0]
     
 
     # This method overloads the + operator for the purpose of reproduction
@@ -92,10 +79,28 @@ class Agent(object):
             child.network[key] = np.where(mask==1,child.network[key]+random,child.network[key])
             #print(child.network[key])
         return child
+
+
+
+    # Act is essentially the forward pass through the network
+    # uses the current state to determine the action the agent will take
+    def act(self, state):       
+        if(state.shape[0] != 1):
+            state = state.reshape(1,-1)
+        net = self.network
+        # take state as input into first layer
+        layer_one = np.tanh(np.matmul(state,net['Layer 1']) + net['Bias 1'])
+        # pass first layers output into next layer as input
+        layer_two = np.tanh(np.matmul(layer_one, net['Layer 2']) + net['Bias 2'])
+        return layer_two[0]
     
+
+
+# run a single trial for an agent using run_trial()
 def run_trial(env,agent,verbose=False):
     EPISODES = 4
-    totals = []
+    # average across 4 episodes
+    rewards = []
     for _ in range(EPISODES):
         state = env.reset()
         if verbose: env.render(mode="human")
@@ -105,14 +110,24 @@ def run_trial(env,agent,verbose=False):
             state, reward, done, _ = env.step(agent.act(state))
             if verbose: env.render()
             total += reward
-        totals.append(total)
-    return sum(totals)/EPISODES
+        rewards.append(total)
+    return sum(rewards)/EPISODES
 
+
+# get next generation of agents using next_generation()
 def next_generation(env,population,fitnesses,temperature):
+
     fitnesses, population =  zip(*sorted(zip(fitnesses,population),reverse=True))
+
+    # elitism using top 25% of individuals
     children = list(population[:int(len(population)/4)])
+
+    # choose individuals using their softmax scores
     parents = list(np.random.choice(population,size=2*(len(population)-len(children)),p=softmax(fitnesses,temperature)))
+
+    # crossover traits
     children = children + [parents[i]+parents[i+1] for i in range(0,len(parents)-1,2)]
+
     fitnesses = [run_trial(env,agent) for agent in children]
 
     return children,fitnesses
